@@ -1,6 +1,10 @@
-# Parallel CI for the CMake-based _build (the make-based flow remains in
-# .circleci/config.yml). Runs entirely with the CMake _build system:
-# configure -> _build -> ctest -> install -> consumers.
+# Parallel CI for the CMake-based build (the make-based flow remains in
+# .circleci/config.yml). Runs entirely with the CMake build system:
+# configure -> build -> ctest -> install -> consumers.
+#
+# Toolchains come from aminya/setup-cpp (floating v1, as in finufft's CI);
+# runner images carry the system compilers on GH (act's slim images get
+# them from the same action).
 
 name: cmake
 on:
@@ -25,18 +29,28 @@ jobs:
     env:
       CC: ${{ matrix.cc }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Install _build tools
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Setup C/C++ toolchain
+        uses: aminya/setup-cpp@v1
+        with:
+          cmake: true         # required floor: cmake >= 3.20
+          ninja: true
+          gcc: ${{ matrix.cc == 'gcc' && 'true' || 'false' }}
+          llvm: ${{ matrix.cc == 'clang' && 'true' || 'false' }}
+      - name: Install build tools
         run: |
           if command -v sudo >/dev/null; then SUDO=sudo; else SUDO=; fi
           $SUDO apt-get update -qq && $SUDO apt-get install -y -qq gcc g++ clang libomp-dev ninja-build python3-pip
-          v=$(cmake --version 2>/dev/null | head -1 || true)
-          case "$v" in
-            "cmake version 4"*) ;;
-            *) python3 -m pip install --user --quiet --break-system-packages cmake
-               echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-               ;;
-          esac
+      - uses: ./.github/actions/cmake4
+      - name: OpenMP runtime for clang (libomp; not covered by setup-cpp)
+        if: matrix.cc == 'clang' && matrix.thr == 'openmp'
+        run: |
+          if command -v sudo >/dev/null; then SUDO=sudo; else SUDO=; fi
+          # setup-cpp's llvm and ubuntu's libomp-dev differ in version; omp.h
+          # lives in the clang resource dir of the matching libomp-*-dev.
+          $SUDO apt-get update -qq && $SUDO apt-get install -y -qq "libomp-$($CC -dumpversion | cut -d. -f1)-dev"
       - name: Configure
         run: |
           cmake -S . -B _build -G Ninja \
@@ -58,7 +72,7 @@ jobs:
           EOF
           mkdir -p consumer && mv main.c consumer/main.c
           cat >consumer/CMakeLists.txt <<'EOF'
-          cmake_minimum_required(VERSION 4.0)
+          cmake_minimum_required(VERSION 3.20...4.4)
           project(consumer C)
           find_package(blis REQUIRED)
           add_executable(c main.c)
@@ -91,18 +105,20 @@ jobs:
       matrix:
         config: [auto, x86_64, zen3, sandybridge, generic]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Setup C/C++ toolchain
+        uses: aminya/setup-cpp@v1
+        with:
+          cmake: true
+          ninja: true
+          gcc: true
       - name: Install build tools
         run: |
           if command -v sudo >/dev/null; then SUDO=sudo; else SUDO=; fi
           $SUDO apt-get update -qq && $SUDO apt-get install -y -qq gcc g++ clang libomp-dev ninja-build python3-pip
-          v=$(cmake --version 2>/dev/null | head -1 || true)
-          case "$v" in
-            "cmake version 4"*) ;;
-            *) python3 -m pip install --user --quiet --break-system-packages cmake
-               echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-               ;;
-          esac
+      - uses: ./.github/actions/cmake4
       - name: Configure + build
         run: |
           cmake -S . -B _build -G Ninja -DBLIS_CONFIG=${{ matrix.config }} \
@@ -116,19 +132,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install build tools + cross toolchain
         run: |
           if command -v sudo >/dev/null; then SUDO=sudo; else SUDO=; fi
           $SUDO apt-get update -qq
           $SUDO apt-get install -y -qq gcc g++ clang libomp-dev ninja-build python3-pip \
             gcc-s390x-linux-gnu g++-s390x-linux-gnu libc6-dev-s390x-cross qemu-user
-          v=$(cmake --version 2>/dev/null | head -1 || true)
-          case "$v" in
-            "cmake version 4"*) ;;
-            *) python3 -m pip install --user --quiet --break-system-packages cmake
-               echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-               ;;
-          esac
+      - uses: ./.github/actions/cmake4
       - name: Configure
         run: |
           cmake -S . -B _build -G Ninja \
@@ -141,8 +153,7 @@ jobs:
             -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
             -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY \
-            -DBLIS_CONFIG=z15 -DBLIS_ENABLE_CBLAS=ON \
-            -DTESTSUITE_WRAPPER='qemu-s390x -cpu max -L /usr/s390x-linux-gnu/'
+            -DBLIS_CONFIG=z15 -DBLIS_ENABLE_CBLAS=ON
       - name: Build
         run: cmake --build _build -j 4
       - name: Test (BLIS testsuite, fast)
@@ -152,24 +163,26 @@ jobs:
 
   macos:
     name: macos-${{ matrix.thr }}
-    runs-on: macos-14
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
         # Apple clang has no bundled OpenMP; keep single/pthreads only.
         thr: [single, pthreads]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Setup C/C++ toolchain
+        uses: aminya/setup-cpp@v1
+        with:
+          cmake: true
+          ninja: true
+          apple-clang: true
       - name: Install build tools
         run: |
           command -v ninja >/dev/null || brew install ninja
-          v=$(cmake --version 2>/dev/null | head -1 || true)
-          case "$v" in
-            "cmake version 4"*) ;;
-            *) python3 -m pip install --user --quiet --break-system-packages cmake
-               echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
-               ;;
-          esac
+      - uses: ./.github/actions/cmake4
       - name: Configure + build (firestorm = Apple Silicon)
         run: |
           cmake -S . -B _build -G Ninja -DBLIS_CONFIG=firestorm \
@@ -178,8 +191,8 @@ jobs:
       - name: Test (fast)
         run: ctest --test-dir _build -R blis-test-fast --output-on-failure
 
-  windows:
-    name: windows-ucrt64
+  windows-gcc:
+    name: windows-ucrt64-gcc
     runs-on: windows-2022
     defaults:
       run:
@@ -190,24 +203,17 @@ jobs:
           msystem: UCRT64
           update: true
           install: >-
-            mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-python
       # The testsuite parser rejects CRLF input files; keep LF as .circleci does.
       - run: git config --global core.autocrlf input
         shell: pwsh
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Install build tools (cmake 4)
-        run: |
-          v=$(cmake --version 2>/dev/null | head -1 || true)
-          case "$v" in
-            "cmake version 4"*) ;;
-            *) python -m pip install --quiet cmake
-               ;;
-          esac
+      - uses: ./.github/actions/cmake4
       - name: Configure + build
         run: |
           cmake --version
@@ -217,4 +223,79 @@ jobs:
       - name: Test (fast)
         run: |
           export PATH="$PWD/_build/lib:$PATH"
+          ctest --test-dir _build -R blis-test-fast --output-on-failure
+
+  # Windows + clang with the MSVC toolchain/environment, mirroring upstream's
+  # AppVeyor Windows-clang flow (clang gnu-driver, windows-msvc target).
+  # MSVC's cl itself is not supported by BLIS (upstream's flag tables are
+  # gcc/clang-dialect); clang-cl is a separate unsupported driver.
+  windows-clang-msvc:
+    name: windows-clang-msvc
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      # The testsuite parser rejects CRLF input files; keep LF as .circleci does.
+      - run: git config --global core.autocrlf input
+        shell: pwsh
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Setup C/C++ toolchain (llvm clang + msvc env + cmake + ninja)
+        uses: aminya/setup-cpp@v1
+        with:
+          llvm: true
+          msvc: true
+          vcvarsall: true
+          cmake: true
+          ninja: true
+      - name: Configure + build
+        run: |
+          where clang && clang --version
+          set CC=clang
+          cmake -S . -B _build -G Ninja -DBLIS_CONFIG=haswell ^
+            -DBLIS_THREADING=single -DBLIS_ENABLE_CBLAS=ON ^
+            -DCMAKE_C_COMPILER=clang
+          cmake --build _build -j 4
+      - name: Test (fast)
+        run: |
+          set PATH=%CD%\_build\lib;%PATH%
+          ctest --test-dir _build -R blis-test-fast --output-on-failure
+
+  # clang-cl: cl-compatible driver with clang code-gen. Not covered by
+  # upstream CI; flags are accepted (with benign ignore-warnings) as verified
+  # against clang-18's clang-cl driver. MSVC's own cl is unsupported (as in
+  # upstream BLIS).
+  windows-clang-cl:
+    name: windows-clang-cl
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      # The testsuite parser rejects CRLF input files; keep LF as .circleci does.
+      - run: git config --global core.autocrlf input
+        shell: pwsh
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Setup C/C++ toolchain (llvm, msvc env, cmake, ninja)
+        uses: aminya/setup-cpp@v1
+        with:
+          llvm: true
+          msvc: true
+          vcvarsall: true
+          cmake: true
+          ninja: true
+      - name: Configure + build
+        run: |
+          where clang-cl
+          cmake -S . -B _build -G Ninja -DBLIS_CONFIG=haswell ^
+            -DBLIS_THREADING=single -DBLIS_ENABLE_CBLAS=ON ^
+            -DCMAKE_C_COMPILER=clang-cl
+          cmake --build _build -j 4
+      - name: Test (fast)
+        run: |
+          set PATH=%CD%\_build\lib;%PATH%
           ctest --test-dir _build -R blis-test-fast --output-on-failure

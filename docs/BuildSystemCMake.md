@@ -1,6 +1,6 @@
 # Building BLIS with CMake
 
-BLIS can be built with CMake (≥ 4.0) instead of `configure` + `make`. The
+BLIS can be built with CMake (≥ 3.20) instead of `configure` + `make`. The
 CMake build ports the full feature surface: configuration families with
 hardware auto-detection, per-kernel-set ISA compilation, threading models
 (single/pthreads/OpenMP/HPX), BLAS and CBLAS compatibility layers, addons,
@@ -34,6 +34,7 @@ and `blis.pc`.
 | | Libraries install to `${BLIS_INSTALL_EXEC_PREFIX}/${CMAKE_INSTALL_LIBDIR}`. |
 | | `blis.pc`, `config.mk`, `uninstall-old`, and Darwin install name all use this dir.
 | `--sharedir`                 | `BLIS_INSTALL_SHAREDIR`           | empty   |
+| `make install` layout        | `BLIS_INSTALL_LAYOUT={make,gnu}`  | `make`  |
 | `--enable/disable-static`    | `BLIS_ENABLE_STATIC`              | `ON`    |
 | `--enable/disable-shared`    | `BLIS_ENABLE_SHARED`              | `ON`    |
 | `-e {public,all}`            | `BLIS_EXPORT_SHARED`              | `public`|
@@ -58,7 +59,9 @@ and `blis.pc`.
 | `-a NAME`                    | `BLIS_ENABLE_ADDONS="a;b"`        | empty   |
 | `-s NAME`                    | `BLIS_SANDBOX=name`               | empty   |
 | `--enable-amd-frame-tweaks`  | `BLIS_ENABLE_AMD_FRAME_TWEAKS`    | `OFF`   |
-| `--enable-arg-max-hack`      | off; largest archive line is 59 KB, under host `ARG_MAX` | - |
+| `--enable/disable-arg-max-hack` | `BLIS_ENABLE_ARG_MAX_HACK`     | `OFF`   |
+| `--enable/disable-verbose-make` | `BLIS_ENABLE_VERBOSE_MAKE`     | `OFF`   |
+| `--show-config-list`         | `BLIS_SHOW_CONFIG_LIST`         | `OFF`   |
 | `--disable-system/-tls`      | `BLIS_ENABLE_SYSTEM/BLIS_ENABLE_TLS` | `ON` |
 | `-r {slab,rr,tlb}`           | `BLIS_THREAD_JRIR_PARTITION`      | `slab`  |
 | `--force-version=x.y.z`      | `BLIS_FORCE_VERSION`              | unset   |
@@ -138,6 +141,10 @@ Notes on deliberate differences from the make build:
   wins and skips the check. Do not add arguments to it.
 - `TESTSUITE_WRAPPER` replaces `CMAKE_CROSSCOMPILING_EMULATOR`. Each test has
   one launcher.
+- With `BLIS_IS_MSVC` (cl, clang-cl or clang targeting windows-msvc) the
+  DLL is `libblis.<major>.dll` and its import library is `libblis.lib`.
+  The static library is `libblis_static.lib` when the shared library also
+  builds, and `libblis.lib` in a static-only build.
 
 ## Make targets as CMake targets
 

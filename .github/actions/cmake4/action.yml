@@ -1,0 +1,25 @@
+name: cmake 4
+description: Install cmake 4 with pip when the image provides an older cmake.
+runs:
+  using: composite
+  steps:
+    # The msys2 job builds with the msys2 cmake, so the check must see that one.
+    - if: runner.os == 'Windows'
+      shell: msys2 {0}
+      run: |
+        v=$(cmake --version 2>/dev/null | head -1 || true)
+        case "$v" in
+          "cmake version 4"*) ;;
+          *) python -m pip install --quiet cmake
+             ;;
+        esac
+    - if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        v=$(cmake --version 2>/dev/null | head -1 || true)
+        case "$v" in
+          "cmake version 4"*) ;;
+          *) python3 -m pip install --user --quiet --break-system-packages cmake
+             echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
+             ;;
+        esac
